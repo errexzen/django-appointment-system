@@ -33,7 +33,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ("id", "username", "email", "phone_number", "first_name", "last_name")
-        read_only_fields = fields
+        read_only_fields = ("id", "username")
 
 
 class LogoutSerializer(serializers.Serializer):

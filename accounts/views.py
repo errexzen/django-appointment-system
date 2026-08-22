@@ -34,7 +34,7 @@ class LogoutView(APIView):
 		return Response({"detail": "Logged out successfully."}, status=status.HTTP_205_RESET_CONTENT)
 
 
-class ProfileView(generics.RetrieveAPIView):
+class ProfileView(generics.RetrieveUpdateAPIView):
 	serializer_class = UserProfileSerializer
 	permission_classes = [permissions.IsAuthenticated]
 

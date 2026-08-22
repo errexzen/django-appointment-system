@@ -27,6 +27,11 @@ class AppointmentCancelView(APIView):
 	def patch(self, request, pk, *args, **kwargs):
 		appointment = get_object_or_404(Appointment, pk=pk)
 		self.check_object_permissions(request, appointment)
+		if appointment.status == AppointmentStatus.CANCELLED:
+			return Response(
+				{"detail": "Appointment is already cancelled."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
 		appointment.status = AppointmentStatus.CANCELLED
 		appointment.save(update_fields=["status"])
 		return Response({"detail": "Appointment cancelled successfully."}, status=status.HTTP_200_OK)

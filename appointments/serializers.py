@@ -31,6 +31,9 @@ class AppointmentSerializer(serializers.ModelSerializer):
         if date < timezone.localdate():
             raise serializers.ValidationError("Cannot book an appointment in the past.")
 
+        if date == timezone.localdate() and time <= timezone.localtime().time():
+            raise serializers.ValidationError("Cannot book an appointment at a past time today.")
+
         weekday = date.weekday()
         in_hours = WorkingHour.objects.filter(
             specialist=specialist,
