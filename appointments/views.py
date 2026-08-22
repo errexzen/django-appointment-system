@@ -37,6 +37,11 @@ class AppointmentConfirmView(APIView):
 
 	def patch(self, request, pk, *args, **kwargs):
 		appointment = get_object_or_404(Appointment, pk=pk)
+		if appointment.status != AppointmentStatus.PENDING:
+			return Response(
+				{"detail": "Only pending appointments can be confirmed."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
 		appointment.status = AppointmentStatus.CONFIRMED
 		appointment.save(update_fields=["status"])
 		return Response({"detail": "Appointment confirmed successfully."}, status=status.HTTP_200_OK)
