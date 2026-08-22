@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework import serializers
 
 from appointments.models import Appointment, AppointmentStatus
@@ -26,6 +27,9 @@ class AppointmentSerializer(serializers.ModelSerializer):
         specialist = attrs.get("specialist")
         date = attrs.get("date")
         time = attrs.get("time")
+
+        if date < timezone.localdate():
+            raise serializers.ValidationError("Cannot book an appointment in the past.")
 
         weekday = date.weekday()
         in_hours = WorkingHour.objects.filter(
