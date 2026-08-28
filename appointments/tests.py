@@ -524,3 +524,438 @@ class AppointmentLifecycleTests(APITestCase):
 		)
 		self.assertIn("09:00", response.data["slots"])
 
+
+# ======================================================================== #
+# Step 4 — Roles & Permissions tests                                        #
+# ======================================================================== #
+
+from accounts.models import UserRole  # noqa: E402  (import after existing test classes)
+
+
+def make_specialist_user(username, specialist):
+	"""Create a user with the specialist role and link them to a Specialist profile."""
+	user = User.objects.create_user(username, password="strongpass123", role=UserRole.SPECIALIST)
+	specialist.user = user
+	specialist.save()
+	return user
+
+
+class CustomerPermissionTests(APITestCase):
+	"""Customers can create/view/cancel their own appointments; nothing else."""
+
+	def setUp(self):
+		self.customer = User.objects.create_user("customer", password="pass123", role=UserRole.CUSTOMER)
+		self.other_customer = User.objects.create_user("other", password="pass123", role=UserRole.CUSTOMER)
+		self.admin = User.objects.create_superuser("admin", "a@example.com", "pass123")
+		self.specialist = Specialist.objects.create(name="Dr. K", profession="GP")
+		WorkingHour.objects.create(
+			specialist=self.specialist, day=Weekday.MONDAY,
+			start_time=time(9, 0), end_time=time(17, 0),
+		)
+		self.monday = next_weekday(Weekday.MONDAY)
+
+	def _appt(self, user, t="10:00:00", appt_status=AppointmentStatus.PENDING):
+		return Appointment.objects.create(
+			user=user, specialist=self.specialist,
+			date=self.monday, time=t, status=appt_status,
+		)
+
+	# ------------------------------------------------------------------ #
+	# Create / view own                                                    #
+	# ------------------------------------------------------------------ #
+
+	def test_customer_can_create_appointment(self):
+		self.client.force_authenticate(user=self.customer)
+		response = self.client.post(
+			"/api/appointments/",
+			{"specialist": self.specialist.id, "date": self.monday, "time": "10:00:00"},
+			format="json",
+		)
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+	def test_customer_can_view_own_appointments(self):
+		self._appt(self.customer)
+		self.client.force_authenticate(user=self.customer)
+		response = self.client.get("/api/my-appointments/")
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(len(response.data), 1)
+
+	def test_customer_cannot_see_other_customers_appointments(self):
+		self._appt(self.other_customer)
+		self.client.force_authenticate(user=self.customer)
+		response = self.client.get("/api/my-appointments/")
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(len(response.data), 0)
+
+	def test_customer_can_cancel_own_appointment(self):
+		appt = self._appt(self.customer)
+		self.client.force_authenticate(user=self.customer)
+		response = self.client.patch(f"/api/appointments/{appt.id}/cancel/")
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	# ------------------------------------------------------------------ #
+	# Forbidden lifecycle actions                                          #
+	# ------------------------------------------------------------------ #
+
+	def test_customer_cannot_confirm_appointment(self):
+		appt = self._appt(self.customer)
+		self.client.force_authenticate(user=self.customer)
+		response = self.client.patch(f"/api/appointments/{appt.id}/confirm/")
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	def test_customer_cannot_complete_appointment(self):
+		appt = self._appt(self.customer, appt_status=AppointmentStatus.CONFIRMED)
+		self.client.force_authenticate(user=self.customer)
+		response = self.client.patch(f"/api/appointments/{appt.id}/complete/")
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	def test_customer_cannot_mark_no_show(self):
+		appt = self._appt(self.customer, appt_status=AppointmentStatus.CONFIRMED)
+		self.client.force_authenticate(user=self.customer)
+		response = self.client.patch(f"/api/appointments/{appt.id}/no-show/")
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	def test_customer_cannot_access_admin_appointment_list(self):
+		self.client.force_authenticate(user=self.customer)
+		response = self.client.get("/api/appointments/")
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	# ------------------------------------------------------------------ #
+	# Direct-ID authorization bypass attempts                             #
+	# ------------------------------------------------------------------ #
+
+	def test_customer_cannot_cancel_another_customers_appointment(self):
+		appt = self._appt(self.other_customer, t="10:00:00")
+		self.client.force_authenticate(user=self.customer)
+		response = self.client.patch(f"/api/appointments/{appt.id}/cancel/")
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	def test_customer_cannot_confirm_another_customers_appointment(self):
+		appt = self._appt(self.other_customer)
+		self.client.force_authenticate(user=self.customer)
+		response = self.client.patch(f"/api/appointments/{appt.id}/confirm/")
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	# ------------------------------------------------------------------ #
+	# Specialist management endpoints forbidden for customers             #
+	# ------------------------------------------------------------------ #
+
+	def test_customer_cannot_create_specialist(self):
+		self.client.force_authenticate(user=self.customer)
+		response = self.client.post(
+			"/api/specialists/",
+			{"name": "Dr. X", "profession": "GP"},
+			format="json",
+		)
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	def test_customer_cannot_add_working_hours(self):
+		self.client.force_authenticate(user=self.customer)
+		response = self.client.post(
+			f"/api/specialists/{self.specialist.id}/working-hours/",
+			{"day": Weekday.MONDAY, "start_time": "09:00", "end_time": "12:00"},
+			format="json",
+		)
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class SpecialistPermissionTests(APITestCase):
+	"""Specialists can act on their assigned appointments; not on others'."""
+
+	def setUp(self):
+		self.customer = User.objects.create_user("customer", password="pass123")
+		self.admin = User.objects.create_superuser("admin", "a@example.com", "pass123")
+
+		# Two specialists with linked user accounts
+		self.specialist_a = Specialist.objects.create(name="Dr. A", profession="GP")
+		self.specialist_b = Specialist.objects.create(name="Dr. B", profession="Dentist")
+		self.spec_user_a = make_specialist_user("spec_a", self.specialist_a)
+		self.spec_user_b = make_specialist_user("spec_b", self.specialist_b)
+
+		WorkingHour.objects.create(
+			specialist=self.specialist_a, day=Weekday.MONDAY,
+			start_time=time(9, 0), end_time=time(17, 0),
+		)
+		WorkingHour.objects.create(
+			specialist=self.specialist_b, day=Weekday.MONDAY,
+			start_time=time(9, 0), end_time=time(17, 0),
+		)
+		self.monday = next_weekday(Weekday.MONDAY)
+
+	def _appt(self, specialist, t="10:00:00", appt_status=AppointmentStatus.PENDING):
+		return Appointment.objects.create(
+			user=self.customer, specialist=specialist,
+			date=self.monday, time=t, status=appt_status,
+		)
+
+	# ------------------------------------------------------------------ #
+	# View own appointments                                                #
+	# ------------------------------------------------------------------ #
+
+	def test_specialist_can_view_own_assigned_appointments(self):
+		self._appt(self.specialist_a)
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.get(f"/api/specialists/{self.specialist_a.id}/appointments/")
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(len(response.data), 1)
+
+	def test_specialist_cannot_view_another_specialists_appointments(self):
+		self._appt(self.specialist_b)
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.get(f"/api/specialists/{self.specialist_b.id}/appointments/")
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	# ------------------------------------------------------------------ #
+	# Valid lifecycle actions on own appointments                          #
+	# ------------------------------------------------------------------ #
+
+	def test_specialist_can_confirm_own_appointment(self):
+		appt = self._appt(self.specialist_a)
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.patch(f"/api/appointments/{appt.id}/confirm/")
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	def test_specialist_can_complete_own_appointment(self):
+		appt = self._appt(self.specialist_a, appt_status=AppointmentStatus.CONFIRMED)
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.patch(f"/api/appointments/{appt.id}/complete/")
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	def test_specialist_can_mark_own_appointment_no_show(self):
+		appt = self._appt(self.specialist_a, appt_status=AppointmentStatus.CONFIRMED)
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.patch(f"/api/appointments/{appt.id}/no-show/")
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	def test_specialist_can_cancel_own_appointment(self):
+		appt = self._appt(self.specialist_a)
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.patch(f"/api/appointments/{appt.id}/cancel/")
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	# ------------------------------------------------------------------ #
+	# Direct-ID bypass: specialist vs another specialist's appointment     #
+	# ------------------------------------------------------------------ #
+
+	def test_specialist_cannot_confirm_another_specialists_appointment(self):
+		appt = self._appt(self.specialist_b)
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.patch(f"/api/appointments/{appt.id}/confirm/")
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	def test_specialist_cannot_complete_another_specialists_appointment(self):
+		appt = self._appt(self.specialist_b, appt_status=AppointmentStatus.CONFIRMED)
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.patch(f"/api/appointments/{appt.id}/complete/")
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	def test_specialist_cannot_no_show_another_specialists_appointment(self):
+		appt = self._appt(self.specialist_b, appt_status=AppointmentStatus.CONFIRMED)
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.patch(f"/api/appointments/{appt.id}/no-show/")
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	def test_specialist_cannot_cancel_another_specialists_appointment(self):
+		appt = self._appt(self.specialist_b)
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.patch(f"/api/appointments/{appt.id}/cancel/")
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	# ------------------------------------------------------------------ #
+	# Specialist cannot access admin-only endpoints                        #
+	# ------------------------------------------------------------------ #
+
+	def test_specialist_cannot_access_admin_appointment_list(self):
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.get("/api/appointments/")
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	def test_specialist_cannot_create_another_specialist(self):
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.post(
+			"/api/specialists/",
+			{"name": "Dr. New", "profession": "GP"},
+			format="json",
+		)
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	def test_specialist_cannot_add_working_hours_to_another_specialist(self):
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.post(
+			f"/api/specialists/{self.specialist_b.id}/working-hours/",
+			{"day": Weekday.TUESDAY, "start_time": "09:00", "end_time": "12:00"},
+			format="json",
+		)
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class AdminPermissionTests(APITestCase):
+	"""Admins (is_staff) have full appointment management access."""
+
+	def setUp(self):
+		self.customer = User.objects.create_user("customer", password="pass123")
+		self.admin = User.objects.create_superuser("admin", "a@example.com", "pass123")
+		self.specialist = Specialist.objects.create(name="Dr. K", profession="GP")
+		WorkingHour.objects.create(
+			specialist=self.specialist, day=Weekday.MONDAY,
+			start_time=time(9, 0), end_time=time(17, 0),
+		)
+		self.monday = next_weekday(Weekday.MONDAY)
+
+	def _appt(self, t="10:00:00", appt_status=AppointmentStatus.PENDING):
+		return Appointment.objects.create(
+			user=self.customer, specialist=self.specialist,
+			date=self.monday, time=t, status=appt_status,
+		)
+
+	def test_admin_can_view_all_appointments(self):
+		self._appt("10:00:00")
+		self._appt("11:00:00")
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.get("/api/appointments/")
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertEqual(len(response.data), 2)
+
+	def test_admin_list_shows_all_customers_appointments(self):
+		other = User.objects.create_user("other", password="pass123")
+		self._appt("10:00:00")
+		Appointment.objects.create(
+			user=other, specialist=self.specialist,
+			date=self.monday, time=time(11, 0),
+		)
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.get("/api/appointments/")
+		self.assertEqual(len(response.data), 2)
+
+	def test_admin_can_confirm(self):
+		appt = self._appt()
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.patch(f"/api/appointments/{appt.id}/confirm/")
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	def test_admin_can_cancel(self):
+		appt = self._appt()
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.patch(f"/api/appointments/{appt.id}/cancel/")
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	def test_admin_can_complete(self):
+		appt = self._appt(appt_status=AppointmentStatus.CONFIRMED)
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.patch(f"/api/appointments/{appt.id}/complete/")
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	def test_admin_can_mark_no_show(self):
+		appt = self._appt(appt_status=AppointmentStatus.CONFIRMED)
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.patch(f"/api/appointments/{appt.id}/no-show/")
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	def test_admin_can_view_specialist_appointments(self):
+		self._appt()
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.get(f"/api/specialists/{self.specialist.id}/appointments/")
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	def test_admin_can_create_specialist(self):
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.post(
+			"/api/specialists/",
+			{"name": "Dr. New", "profession": "GP"},
+			format="json",
+		)
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+	def test_admin_can_delete_working_hour(self):
+		wh = WorkingHour.objects.get(specialist=self.specialist)
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.delete(
+			f"/api/specialists/{self.specialist.id}/working-hours/{wh.id}/"
+		)
+		self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+
+class UnauthenticatedPermissionTests(APITestCase):
+	"""Unauthenticated requests must be rejected on protected endpoints."""
+
+	def setUp(self):
+		self.customer = User.objects.create_user("customer", password="pass123")
+		self.specialist = Specialist.objects.create(name="Dr. K", profession="GP")
+		WorkingHour.objects.create(
+			specialist=self.specialist, day=Weekday.MONDAY,
+			start_time=time(9, 0), end_time=time(17, 0),
+		)
+		self.monday = next_weekday(Weekday.MONDAY)
+		self.appt = Appointment.objects.create(
+			user=self.customer, specialist=self.specialist,
+			date=self.monday, time=time(10, 0),
+		)
+
+	def test_unauthenticated_cannot_create_appointment(self):
+		response = self.client.post(
+			"/api/appointments/",
+			{"specialist": self.specialist.id, "date": self.monday, "time": "11:00:00"},
+			format="json",
+		)
+		self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+	def test_unauthenticated_cannot_view_my_appointments(self):
+		response = self.client.get("/api/my-appointments/")
+		self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+	def test_unauthenticated_cannot_access_admin_list(self):
+		response = self.client.get("/api/appointments/")
+		self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+	def test_unauthenticated_cannot_cancel(self):
+		response = self.client.patch(f"/api/appointments/{self.appt.id}/cancel/")
+		self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+	def test_unauthenticated_cannot_confirm(self):
+		response = self.client.patch(f"/api/appointments/{self.appt.id}/confirm/")
+		self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+	def test_unauthenticated_cannot_complete(self):
+		appt = Appointment.objects.create(
+			user=self.customer, specialist=self.specialist,
+			date=self.monday, time=time(11, 0), status=AppointmentStatus.CONFIRMED,
+		)
+		response = self.client.patch(f"/api/appointments/{appt.id}/complete/")
+		self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+	def test_unauthenticated_cannot_view_specialist_appointments(self):
+		response = self.client.get(f"/api/specialists/{self.specialist.id}/appointments/")
+		self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class RoleFieldTests(APITestCase):
+	"""Tests for the role field on the User model."""
+
+	def test_default_role_is_customer(self):
+		user = User.objects.create_user("u", password="pass123")
+		self.assertEqual(user.role, UserRole.CUSTOMER)
+
+	def test_specialist_role_can_be_set(self):
+		user = User.objects.create_user("s", password="pass123", role=UserRole.SPECIALIST)
+		self.assertEqual(user.role, UserRole.SPECIALIST)
+
+	def test_admin_role_can_be_set(self):
+		user = User.objects.create_user("a", password="pass123", role=UserRole.ADMIN)
+		self.assertEqual(user.role, UserRole.ADMIN)
+
+	def test_owner_role_can_be_set(self):
+		user = User.objects.create_user("o", password="pass123", role=UserRole.OWNER)
+		self.assertEqual(user.role, UserRole.OWNER)
+
+	def test_specialist_profile_link(self):
+		specialist = Specialist.objects.create(name="Dr. Z", profession="GP")
+		user = make_specialist_user("linked", specialist)
+		self.assertEqual(user.specialist_profile, specialist)
+		self.assertEqual(specialist.user, user)
+
+	def test_unlinked_user_has_no_specialist_profile(self):
+		user = User.objects.create_user("plain", password="pass123")
+		with self.assertRaises(Exception):
+			_ = user.specialist_profile
+
+

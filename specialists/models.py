@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models
 from django.core.exceptions import ValidationError
@@ -14,6 +15,13 @@ class Weekday(models.IntegerChoices):
 
 
 class Specialist(models.Model):
+	user = models.OneToOneField(
+		settings.AUTH_USER_MODEL,
+		on_delete=models.SET_NULL,
+		null=True,
+		blank=True,
+		related_name="specialist_profile",
+	)
 	name = models.CharField(max_length=120)
 	profession = models.CharField(max_length=120)
 	description = models.TextField(blank=True)

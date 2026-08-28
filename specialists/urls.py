@@ -1,6 +1,7 @@
 from django.urls import path
 
 from specialists.views import (
+    SpecialistAppointmentsView,
     SpecialistAvailableSlotsView,
     SpecialistDetailView,
     SpecialistListView,
@@ -26,5 +27,10 @@ urlpatterns = [
         "specialists/<int:pk>/available-slots/",
         SpecialistAvailableSlotsView.as_view(),
         name="specialist-available-slots",
+    ),
+    path(
+        "specialists/<int:pk>/appointments/",
+        SpecialistAppointmentsView.as_view(),
+        name="specialist-appointments",
     ),
 ]

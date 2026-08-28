@@ -14,7 +14,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from appointments.models import Appointment, AppointmentStatus
+from appointments.serializers import AppointmentSerializer
 from specialists.models import Specialist, WorkingHour
+from specialists.permissions import IsAdminOrLinkedSpecialist
 from specialists.serializers import (
     SpecialistSerializer,
     WorkingHourSerializer,
@@ -172,3 +174,19 @@ class SpecialistAvailableSlotsView(APIView):
 			"slot_duration": slot_duration,
 			"slots": [t.strftime("%H:%M") for t in available],
 		})
+
+
+class SpecialistAppointmentsView(generics.ListAPIView):
+	"""
+	GET /api/specialists/<pk>/appointments/
+	Admin can view any specialist's appointments.
+	A specialist user can only view their own appointments (linked via specialist_profile).
+	"""
+
+	serializer_class = AppointmentSerializer
+	permission_classes = [IsAdminOrLinkedSpecialist]
+
+	def get_queryset(self):
+		specialist = get_object_or_404(Specialist, pk=self.kwargs["pk"])
+		return Appointment.objects.filter(specialist=specialist).select_related("user", "specialist")
+
