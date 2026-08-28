@@ -1,6 +1,7 @@
 from django.db import models
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator
 
 from specialists.models import Specialist, WorkingHour
 
@@ -8,7 +9,23 @@ from specialists.models import Specialist, WorkingHour
 class AppointmentStatus(models.TextChoices):
 	PENDING = "pending", "Pending"
 	CONFIRMED = "confirmed", "Confirmed"
+	COMPLETED = "completed", "Completed"
+	NO_SHOW = "no_show", "No Show"
 	CANCELLED = "cancelled", "Cancelled"
+
+
+# Maps each status to the set of statuses it may transition into.
+ALLOWED_TRANSITIONS: dict[str, set[str]] = {
+	AppointmentStatus.PENDING: {AppointmentStatus.CONFIRMED, AppointmentStatus.CANCELLED},
+	AppointmentStatus.CONFIRMED: {
+		AppointmentStatus.COMPLETED,
+		AppointmentStatus.NO_SHOW,
+		AppointmentStatus.CANCELLED,
+	},
+	AppointmentStatus.COMPLETED: set(),
+	AppointmentStatus.NO_SHOW: set(),
+	AppointmentStatus.CANCELLED: set(),
+}
 
 
 class Appointment(models.Model):
@@ -29,7 +46,13 @@ class Appointment(models.Model):
 		choices=AppointmentStatus.choices,
 		default=AppointmentStatus.PENDING,
 	)
+	notes = models.TextField(blank=True)
+	duration = models.PositiveIntegerField(
+		default=30,
+		validators=[MinValueValidator(1)],
+	)
 	created_at = models.DateTimeField(auto_now_add=True)
+	updated_at = models.DateTimeField(auto_now=True)
 
 	class Meta:
 		ordering = ["-date", "-time", "-created_at"]
@@ -54,5 +77,3 @@ class Appointment(models.Model):
 
 	def __str__(self):
 		return f"{self.user} -> {self.specialist} ({self.date} {self.time})"
-
-# Create your models here.

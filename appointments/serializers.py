@@ -1,7 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
 
-from appointments.models import Appointment, AppointmentStatus
+from appointments.models import ALLOWED_TRANSITIONS, Appointment, AppointmentStatus
 from specialists.models import WorkingHour
 
 
@@ -19,9 +19,12 @@ class AppointmentSerializer(serializers.ModelSerializer):
             "date",
             "time",
             "status",
+            "notes",
+            "duration",
             "created_at",
+            "updated_at",
         )
-        read_only_fields = ("id", "user", "status", "created_at")
+        read_only_fields = ("id", "user", "status", "created_at", "updated_at")
 
     def validate(self, attrs):
         specialist = attrs.get("specialist")
@@ -70,10 +73,23 @@ class AppointmentSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data["user"] = self.context["request"].user
+        if "duration" not in validated_data:
+            validated_data["duration"] = validated_data["specialist"].slot_duration
         return super().create(validated_data)
 
 
 class AppointmentStatusSerializer(serializers.ModelSerializer):
+    """Used exclusively for status transitions. Validates lifecycle rules."""
+
     class Meta:
         model = Appointment
         fields = ("status",)
+
+    def validate_status(self, new_status):
+        current = self.instance.status
+        allowed = ALLOWED_TRANSITIONS.get(current, set())
+        if new_status not in allowed:
+            raise serializers.ValidationError(
+                f"Cannot transition appointment from '{current}' to '{new_status}'."
+            )
+        return new_status

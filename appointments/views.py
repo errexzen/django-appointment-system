@@ -5,7 +5,7 @@ from rest_framework.views import APIView
 
 from appointments.models import Appointment, AppointmentStatus
 from appointments.permissions import IsOwnerOrAdmin
-from appointments.serializers import AppointmentSerializer
+from appointments.serializers import AppointmentSerializer, AppointmentStatusSerializer
 
 
 class AppointmentCreateView(generics.CreateAPIView):
@@ -27,13 +27,13 @@ class AppointmentCancelView(APIView):
 	def patch(self, request, pk, *args, **kwargs):
 		appointment = get_object_or_404(Appointment, pk=pk)
 		self.check_object_permissions(request, appointment)
-		if appointment.status == AppointmentStatus.CANCELLED:
-			return Response(
-				{"detail": "Appointment is already cancelled."},
-				status=status.HTTP_400_BAD_REQUEST,
-			)
-		appointment.status = AppointmentStatus.CANCELLED
-		appointment.save(update_fields=["status"])
+		serializer = AppointmentStatusSerializer(
+			appointment,
+			data={"status": AppointmentStatus.CANCELLED},
+			partial=True,
+		)
+		serializer.is_valid(raise_exception=True)
+		serializer.save()
 		return Response({"detail": "Appointment cancelled successfully."}, status=status.HTTP_200_OK)
 
 
@@ -42,11 +42,41 @@ class AppointmentConfirmView(APIView):
 
 	def patch(self, request, pk, *args, **kwargs):
 		appointment = get_object_or_404(Appointment, pk=pk)
-		if appointment.status != AppointmentStatus.PENDING:
-			return Response(
-				{"detail": "Only pending appointments can be confirmed."},
-				status=status.HTTP_400_BAD_REQUEST,
-			)
-		appointment.status = AppointmentStatus.CONFIRMED
-		appointment.save(update_fields=["status"])
+		serializer = AppointmentStatusSerializer(
+			appointment,
+			data={"status": AppointmentStatus.CONFIRMED},
+			partial=True,
+		)
+		serializer.is_valid(raise_exception=True)
+		serializer.save()
 		return Response({"detail": "Appointment confirmed successfully."}, status=status.HTTP_200_OK)
+
+
+class AppointmentCompleteView(APIView):
+	permission_classes = [permissions.IsAdminUser]
+
+	def patch(self, request, pk, *args, **kwargs):
+		appointment = get_object_or_404(Appointment, pk=pk)
+		serializer = AppointmentStatusSerializer(
+			appointment,
+			data={"status": AppointmentStatus.COMPLETED},
+			partial=True,
+		)
+		serializer.is_valid(raise_exception=True)
+		serializer.save()
+		return Response({"detail": "Appointment marked as completed."}, status=status.HTTP_200_OK)
+
+
+class AppointmentNoShowView(APIView):
+	permission_classes = [permissions.IsAdminUser]
+
+	def patch(self, request, pk, *args, **kwargs):
+		appointment = get_object_or_404(Appointment, pk=pk)
+		serializer = AppointmentStatusSerializer(
+			appointment,
+			data={"status": AppointmentStatus.NO_SHOW},
+			partial=True,
+		)
+		serializer.is_valid(raise_exception=True)
+		serializer.save()
+		return Response({"detail": "Appointment marked as no-show."}, status=status.HTTP_200_OK)
