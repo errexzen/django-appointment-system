@@ -1,3 +1,4 @@
+from django.core.validators import MinValueValidator
 from django.db import models
 from django.core.exceptions import ValidationError
 
@@ -17,6 +18,7 @@ class Specialist(models.Model):
 	profession = models.CharField(max_length=120)
 	description = models.TextField(blank=True)
 	image = models.ImageField(upload_to="specialists/", blank=True, null=True)
+	slot_duration = models.PositiveIntegerField(default=30, validators=[MinValueValidator(1)])
 	created_at = models.DateTimeField(auto_now_add=True)
 
 	class Meta:

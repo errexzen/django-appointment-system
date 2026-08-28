@@ -1,13 +1,31 @@
-from rest_framework import generics, permissions
+from datetime import date, datetime, timedelta
 
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiResponse,
+    OpenApiTypes,
+    extend_schema,
+    inline_serializer,
+)
+from rest_framework import generics, permissions, serializers as rf_serializers, status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from appointments.models import Appointment, AppointmentStatus
 from specialists.models import Specialist, WorkingHour
-from specialists.serializers import SpecialistSerializer, WorkingHourSerializer
+from specialists.serializers import (
+    SpecialistSerializer,
+    WorkingHourSerializer,
+    WorkingHourWriteSerializer,
+)
 
 
 class SpecialistListView(generics.ListCreateAPIView):
 	queryset = Specialist.objects.all()
 	serializer_class = SpecialistSerializer
-	search_fields = ["profession"]
+	search_fields = ["name", "profession"]
 
 	def get_permissions(self):
 		if self.request.method == "POST":
@@ -25,9 +43,132 @@ class SpecialistDetailView(generics.RetrieveUpdateDestroyAPIView):
 		return [permissions.AllowAny()]
 
 
-class SpecialistWorkingHoursView(generics.ListAPIView):
-	serializer_class = WorkingHourSerializer
-	permission_classes = [permissions.AllowAny]
+class SpecialistWorkingHoursView(generics.ListCreateAPIView):
+	"""GET: public list of working hours. POST: admin-only creation."""
+
+	def get_serializer_class(self):
+		if self.request.method == "POST":
+			return WorkingHourWriteSerializer
+		return WorkingHourSerializer
+
+	def get_permissions(self):
+		if self.request.method == "POST":
+			return [permissions.IsAdminUser()]
+		return [permissions.AllowAny()]
 
 	def get_queryset(self):
 		return WorkingHour.objects.filter(specialist_id=self.kwargs["pk"])
+
+	def get_serializer_context(self):
+		ctx = super().get_serializer_context()
+		if self.request.method == "POST":
+			ctx["specialist"] = get_object_or_404(Specialist, pk=self.kwargs["pk"])
+		return ctx
+
+	def perform_create(self, serializer):
+		specialist = get_object_or_404(Specialist, pk=self.kwargs["pk"])
+		serializer.save(specialist=specialist)
+
+
+class SpecialistWorkingHourDeleteView(generics.DestroyAPIView):
+	permission_classes = [permissions.IsAdminUser]
+
+	def get_object(self):
+		# Ensures the working hour belongs to the specialist in the URL.
+		return get_object_or_404(
+			WorkingHour,
+			pk=self.kwargs["working_hour_id"],
+			specialist_id=self.kwargs["pk"],
+		)
+
+
+@extend_schema(
+    parameters=[
+        OpenApiParameter(
+            name="date",
+            description="Date to check availability for (YYYY-MM-DD).",
+            required=True,
+            type=OpenApiTypes.DATE,
+            location=OpenApiParameter.QUERY,
+        ),
+    ],
+    responses={
+        200: inline_serializer(
+            name="AvailableSlotsResponse",
+            fields={
+                "specialist": rf_serializers.IntegerField(),
+                "date": rf_serializers.DateField(),
+                "slot_duration": rf_serializers.IntegerField(),
+                "slots": rf_serializers.ListField(child=rf_serializers.CharField()),
+            },
+        ),
+        400: OpenApiResponse(description="Missing or invalid date, or date is in the past."),
+        404: OpenApiResponse(description="Specialist not found."),
+    },
+)
+class SpecialistAvailableSlotsView(APIView):
+	"""
+	Returns available booking slots for a specialist on the given date.
+	Slots are generated from the specialist's working hours minus existing active
+	appointments, using the specialist's slot_duration (in minutes).
+	Past dates return 400 (consistent with appointment booking rejecting past dates).
+	"""
+
+	permission_classes = [permissions.AllowAny]
+
+	def get(self, request, pk):
+		specialist = get_object_or_404(Specialist, pk=pk)
+
+		date_str = request.query_params.get("date")
+		if not date_str:
+			return Response(
+				{"detail": "date query parameter is required."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
+
+		try:
+			requested_date = date.fromisoformat(date_str)
+		except ValueError:
+			return Response(
+				{"detail": "Invalid date format. Use YYYY-MM-DD."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
+
+		if requested_date < timezone.localdate():
+			return Response(
+				{"detail": "Cannot retrieve available slots for a past date."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
+
+		weekday = requested_date.weekday()
+		working_hours = WorkingHour.objects.filter(
+			specialist=specialist, day=weekday
+		).order_by("start_time")
+
+		slot_duration = specialist.slot_duration
+		delta = timedelta(minutes=slot_duration)
+		all_slots: set[datetime] = set()
+
+		for wh in working_hours:
+			current = datetime.combine(date.min, wh.start_time)
+			end = datetime.combine(date.min, wh.end_time)
+			while current + delta <= end:
+				all_slots.add(current.time())
+				current += delta
+
+		booked_times = set(
+			Appointment.objects.filter(
+				specialist=specialist,
+				date=requested_date,
+				status__in=[AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED],
+			).values_list("time", flat=True)
+		)
+
+		available = sorted(all_slots - booked_times)
+
+		return Response({
+			"specialist": specialist.id,
+			"date": str(requested_date),
+			"slot_duration": slot_duration,
+			"slots": [t.strftime("%H:%M") for t in available],
+		})

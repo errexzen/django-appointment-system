@@ -1,6 +1,12 @@
 from django.urls import path
 
-from specialists.views import SpecialistDetailView, SpecialistListView, SpecialistWorkingHoursView
+from specialists.views import (
+    SpecialistAvailableSlotsView,
+    SpecialistDetailView,
+    SpecialistListView,
+    SpecialistWorkingHourDeleteView,
+    SpecialistWorkingHoursView,
+)
 
 
 urlpatterns = [
@@ -10,5 +16,15 @@ urlpatterns = [
         "specialists/<int:pk>/working-hours/",
         SpecialistWorkingHoursView.as_view(),
         name="specialist-working-hours",
+    ),
+    path(
+        "specialists/<int:pk>/working-hours/<int:working_hour_id>/",
+        SpecialistWorkingHourDeleteView.as_view(),
+        name="specialist-working-hour-detail",
+    ),
+    path(
+        "specialists/<int:pk>/available-slots/",
+        SpecialistAvailableSlotsView.as_view(),
+        name="specialist-available-slots",
     ),
 ]

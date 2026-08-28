@@ -35,14 +35,27 @@ class AppointmentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Cannot book an appointment at a past time today.")
 
         weekday = date.weekday()
-        in_hours = WorkingHour.objects.filter(
+        working_hours = WorkingHour.objects.filter(
             specialist=specialist,
             day=weekday,
             start_time__lte=time,
             end_time__gt=time,
-        ).exists()
-        if not in_hours:
+        )
+        if not working_hours.exists():
             raise serializers.ValidationError("Selected time is outside specialist working hours.")
+
+        slot_duration = specialist.slot_duration
+        def _minutes(t):
+            return t.hour * 60 + t.minute
+
+        aligned = any(
+            (_minutes(time) - _minutes(wh.start_time)) % slot_duration == 0
+            for wh in working_hours
+        )
+        if not aligned:
+            raise serializers.ValidationError(
+                f"Selected time does not align with the {slot_duration}-minute slot grid."
+            )
 
         duplicate_exists = Appointment.objects.filter(
             specialist=specialist,
