@@ -788,6 +788,82 @@ class SpecialistPermissionTests(APITestCase):
 		)
 		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
+	# ------------------------------------------------------------------ #
+	# Specialist must NOT create appointments via POST /api/appointments/  #
+	# ------------------------------------------------------------------ #
+
+	def test_specialist_cannot_create_appointment_for_self(self):
+		"""Specialist booking an appointment as a customer must be rejected."""
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.post(
+			"/api/appointments/",
+			{"specialist": self.specialist_a.id, "date": self.monday, "time": "10:00:00"},
+			format="json",
+		)
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	def test_specialist_cannot_create_appointment_for_another_customer(self):
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.post(
+			"/api/appointments/",
+			{"specialist": self.specialist_a.id, "date": self.monday, "time": "11:00:00"},
+			format="json",
+		)
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	def test_specialist_cannot_create_appointment_assigned_to_themselves(self):
+		"""Even with specialist=self.specialist_a in payload, must be rejected."""
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.post(
+			"/api/appointments/",
+			{"specialist": self.specialist_a.id, "date": self.monday, "time": "12:00:00"},
+			format="json",
+		)
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	def test_specialist_cannot_create_appointment_assigned_to_another_specialist(self):
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.post(
+			"/api/appointments/",
+			{"specialist": self.specialist_b.id, "date": self.monday, "time": "10:00:00"},
+			format="json",
+		)
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class AppointmentCreationAuthorizationTests(APITestCase):
+	"""Regression: customer creation still works; admin creation still works."""
+
+	def setUp(self):
+		self.customer_a = User.objects.create_user("cust_a", password="pass123")
+		self.customer_b = User.objects.create_user("cust_b", password="pass123")
+		self.admin = User.objects.create_superuser("admin", "a@example.com", "pass123")
+		self.specialist = Specialist.objects.create(name="Dr. R", profession="GP")
+		WorkingHour.objects.create(
+			specialist=self.specialist, day=Weekday.MONDAY,
+			start_time=time(9, 0), end_time=time(17, 0),
+		)
+		self.monday = next_weekday(Weekday.MONDAY)
+
+	def test_customer_can_create_own_appointment(self):
+		self.client.force_authenticate(user=self.customer_a)
+		response = self.client.post(
+			"/api/appointments/",
+			{"specialist": self.specialist.id, "date": self.monday, "time": "10:00:00"},
+			format="json",
+		)
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+		self.assertEqual(Appointment.objects.get().user, self.customer_a)
+
+	def test_admin_can_create_appointment(self):
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.post(
+			"/api/appointments/",
+			{"specialist": self.specialist.id, "date": self.monday, "time": "10:00:00"},
+			format="json",
+		)
+		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
 
 class AdminPermissionTests(APITestCase):
 	"""Admins (is_staff) have full appointment management access."""

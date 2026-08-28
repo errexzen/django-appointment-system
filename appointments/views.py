@@ -7,6 +7,7 @@ from appointments.models import Appointment, AppointmentStatus
 from appointments.permissions import (
 	IsAdminOrAssignedSpecialist,
 	IsAppointmentCanceller,
+	IsNotSpecialist,
 	IsOwnerOrAdmin,
 )
 from appointments.serializers import AppointmentSerializer, AppointmentStatusSerializer
@@ -20,7 +21,8 @@ class AppointmentListCreateView(generics.ListCreateAPIView):
 	def get_permissions(self):
 		if self.request.method == "GET":
 			return [permissions.IsAdminUser()]
-		return [permissions.IsAuthenticated()]
+		# POST: authenticated non-specialists only
+		return [permissions.IsAuthenticated(), IsNotSpecialist()]
 
 	def get_queryset(self):
 		return Appointment.objects.select_related("user", "specialist").all()

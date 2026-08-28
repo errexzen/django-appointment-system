@@ -7,6 +7,14 @@ class IsOwnerOrAdmin(BasePermission):
         return request.user and (request.user.is_staff or obj.user_id == request.user.id)
 
 
+class IsNotSpecialist(BasePermission):
+    """Denies access to users who have a linked specialist profile (specialist role)."""
+    def has_permission(self, request, view):
+        if not request.user or not request.user.is_authenticated:
+            return True  # unauthenticated handled by IsAuthenticated, not here
+        return getattr(request.user, "specialist_profile", None) is None
+
+
 class IsAdminOrAssignedSpecialist(BasePermission):
     """
     View-level: must be authenticated.
