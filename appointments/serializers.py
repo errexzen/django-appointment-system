@@ -93,3 +93,60 @@ class AppointmentStatusSerializer(serializers.ModelSerializer):
                 f"Cannot transition appointment from '{current}' to '{new_status}'."
             )
         return new_status
+
+
+class AppointmentRescheduleSerializer(serializers.Serializer):
+    """Validates the new date/time for a reschedule request."""
+
+    date = serializers.DateField()
+    time = serializers.TimeField()
+
+    def validate(self, attrs):
+        appointment = self.context["appointment"]
+        new_date = attrs["date"]
+        new_time = attrs["time"]
+        specialist = appointment.specialist
+
+        if appointment.date == new_date and appointment.time == new_time:
+            raise serializers.ValidationError("New slot is identical to the current slot.")
+
+        if new_date < timezone.localdate():
+            raise serializers.ValidationError("Cannot reschedule to a past date.")
+
+        if new_date == timezone.localdate() and new_time <= timezone.localtime().time():
+            raise serializers.ValidationError("Cannot reschedule to a past time today.")
+
+        weekday = new_date.weekday()
+        working_hours = WorkingHour.objects.filter(
+            specialist=specialist,
+            day=weekday,
+            start_time__lte=new_time,
+            end_time__gt=new_time,
+        )
+        if not working_hours.exists():
+            raise serializers.ValidationError("Selected time is outside specialist working hours.")
+
+        def _minutes(t):
+            return t.hour * 60 + t.minute
+
+        slot_duration = specialist.slot_duration
+        aligned = any(
+            (_minutes(new_time) - _minutes(wh.start_time)) % slot_duration == 0
+            for wh in working_hours
+        )
+        if not aligned:
+            raise serializers.ValidationError(
+                f"Selected time does not align with the {slot_duration}-minute slot grid."
+            )
+
+        # Exclude self to avoid false conflict when validating the new slot.
+        conflict = Appointment.objects.filter(
+            specialist=specialist,
+            date=new_date,
+            time=new_time,
+            status__in=[AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED],
+        ).exclude(pk=appointment.pk).exists()
+        if conflict:
+            raise serializers.ValidationError("This slot is already booked.")
+
+        return attrs

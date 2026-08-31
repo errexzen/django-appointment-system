@@ -1035,3 +1035,377 @@ class RoleFieldTests(APITestCase):
 			_ = user.specialist_profile
 
 
+# ======================================================================== #
+# Phase 1 — Step 5: Appointment Reschedule tests                           #
+# ======================================================================== #
+
+class AppointmentRescheduleTests(APITestCase):
+	"""Comprehensive tests for PATCH /api/appointments/<pk>/reschedule/"""
+
+	def setUp(self):
+		self.customer = User.objects.create_user("customer", password="pass123")
+		self.other_customer = User.objects.create_user("other_customer", password="pass123")
+		self.admin = User.objects.create_superuser("admin", "a@example.com", "pass123")
+
+		self.specialist_a = Specialist.objects.create(name="Dr. A", profession="GP", slot_duration=30)
+		self.specialist_b = Specialist.objects.create(name="Dr. B", profession="Dentist", slot_duration=30)
+		self.spec_user_a = make_specialist_user("spec_a", self.specialist_a)
+		self.spec_user_b = make_specialist_user("spec_b", self.specialist_b)
+
+		WorkingHour.objects.create(
+			specialist=self.specialist_a, day=Weekday.MONDAY,
+			start_time=time(9, 0), end_time=time(17, 0),
+		)
+		WorkingHour.objects.create(
+			specialist=self.specialist_b, day=Weekday.MONDAY,
+			start_time=time(9, 0), end_time=time(17, 0),
+		)
+
+		self.monday = next_weekday(Weekday.MONDAY)
+		self.next_monday = self.monday + timedelta(weeks=1)
+
+	def _appt(self, user=None, specialist=None, t="10:00:00", appt_status=AppointmentStatus.PENDING):
+		return Appointment.objects.create(
+			user=user or self.customer,
+			specialist=specialist or self.specialist_a,
+			date=self.monday,
+			time=t,
+			status=appt_status,
+		)
+
+	def _reschedule(self, pk, new_date, new_time, auth_user):
+		self.client.force_authenticate(user=auth_user)
+		return self.client.patch(
+			f"/api/appointments/{pk}/reschedule/",
+			{"date": str(new_date), "time": new_time},
+			format="json",
+		)
+
+	# ------------------------------------------------------------------ #
+	# Successful reschedule                                                #
+	# ------------------------------------------------------------------ #
+
+	def test_customer_reschedules_own_pending_appointment(self):
+		appt = self._appt(appt_status=AppointmentStatus.PENDING)
+		response = self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		appt.refresh_from_db()
+		self.assertEqual(appt.date, self.next_monday)
+		self.assertEqual(appt.time, time(11, 0))
+
+	def test_customer_reschedules_own_confirmed_appointment(self):
+		appt = self._appt(appt_status=AppointmentStatus.CONFIRMED)
+		response = self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		appt.refresh_from_db()
+		self.assertEqual(appt.date, self.next_monday)
+
+	def test_specialist_reschedules_assigned_appointment(self):
+		appt = self._appt(specialist=self.specialist_a)
+		response = self._reschedule(appt.id, self.next_monday, "11:00:00", self.spec_user_a)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	def test_admin_reschedules_appointment(self):
+		appt = self._appt()
+		response = self._reschedule(appt.id, self.next_monday, "11:00:00", self.admin)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	# ------------------------------------------------------------------ #
+	# Data preservation                                                    #
+	# ------------------------------------------------------------------ #
+
+	def test_appointment_id_unchanged(self):
+		appt = self._appt()
+		original_id = appt.id
+		self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		appt.refresh_from_db()
+		self.assertEqual(appt.id, original_id)
+
+	def test_customer_field_unchanged(self):
+		appt = self._appt()
+		self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		appt.refresh_from_db()
+		self.assertEqual(appt.user, self.customer)
+
+	def test_specialist_field_unchanged(self):
+		appt = self._appt(specialist=self.specialist_a)
+		self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		appt.refresh_from_db()
+		self.assertEqual(appt.specialist, self.specialist_a)
+
+	def test_notes_preserved(self):
+		appt = self._appt()
+		appt.notes = "Important notes"
+		appt.save()
+		self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		appt.refresh_from_db()
+		self.assertEqual(appt.notes, "Important notes")
+
+	def test_duration_preserved(self):
+		appt = self._appt()
+		appt.duration = 45
+		appt.save()
+		self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		appt.refresh_from_db()
+		self.assertEqual(appt.duration, 45)
+
+	def test_status_unchanged_after_reschedule(self):
+		appt = self._appt(appt_status=AppointmentStatus.PENDING)
+		self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		appt.refresh_from_db()
+		self.assertEqual(appt.status, AppointmentStatus.PENDING)
+
+	def test_updated_at_changes_after_reschedule(self):
+		appt = self._appt()
+		original_updated_at = appt.updated_at
+		self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		appt.refresh_from_db()
+		self.assertGreaterEqual(appt.updated_at, original_updated_at)
+
+	def test_old_slot_becomes_available_after_reschedule(self):
+		appt = self._appt(t="09:00:00")
+		self._reschedule(appt.id, self.next_monday, "10:00:00", self.customer)
+		response = self.client.get(
+			f"/api/specialists/{self.specialist_a.id}/available-slots/",
+			{"date": self.monday},
+		)
+		self.assertIn("09:00", response.data["slots"])
+
+	def test_new_slot_becomes_occupied_after_reschedule(self):
+		appt = self._appt(t="09:00:00")
+		self._reschedule(appt.id, self.next_monday, "10:00:00", self.customer)
+		response = self.client.get(
+			f"/api/specialists/{self.specialist_a.id}/available-slots/",
+			{"date": self.next_monday},
+		)
+		self.assertNotIn("10:00", response.data["slots"])
+
+	def test_response_contains_updated_datetime(self):
+		appt = self._appt()
+		response = self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		self.assertEqual(str(response.data["date"]), str(self.next_monday))
+		self.assertIn("11:00", response.data["time"])
+
+	def test_response_uses_appointment_serializer_fields(self):
+		appt = self._appt()
+		response = self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		for field in ("id", "user", "specialist", "date", "time", "status", "duration", "notes"):
+			self.assertIn(field, response.data)
+
+	# ------------------------------------------------------------------ #
+	# Permission tests                                                     #
+	# ------------------------------------------------------------------ #
+
+	def test_unauthenticated_rejected_with_401(self):
+		appt = self._appt()
+		response = self.client.patch(
+			f"/api/appointments/{appt.id}/reschedule/",
+			{"date": str(self.next_monday), "time": "11:00:00"},
+			format="json",
+		)
+		self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+	def test_other_customer_rejected_with_403(self):
+		appt = self._appt(user=self.customer)
+		response = self._reschedule(appt.id, self.next_monday, "11:00:00", self.other_customer)
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	def test_specialist_b_cannot_reschedule_specialist_a_appointment(self):
+		appt = self._appt(specialist=self.specialist_a)
+		response = self._reschedule(appt.id, self.next_monday, "11:00:00", self.spec_user_b)
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+	def test_other_customer_appointment_unchanged_after_rejected_reschedule(self):
+		appt = self._appt(user=self.customer)
+		self._reschedule(appt.id, self.next_monday, "11:00:00", self.other_customer)
+		appt.refresh_from_db()
+		self.assertEqual(appt.date, self.monday)
+
+	# ------------------------------------------------------------------ #
+	# Status restriction tests                                             #
+	# ------------------------------------------------------------------ #
+
+	def test_pending_can_be_rescheduled(self):
+		appt = self._appt(appt_status=AppointmentStatus.PENDING)
+		response = self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	def test_confirmed_can_be_rescheduled(self):
+		appt = self._appt(appt_status=AppointmentStatus.CONFIRMED)
+		response = self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	def test_cancelled_cannot_be_rescheduled(self):
+		appt = self._appt(appt_status=AppointmentStatus.CANCELLED)
+		response = self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+		appt.refresh_from_db()
+		self.assertEqual(appt.date, self.monday)
+
+	def test_completed_cannot_be_rescheduled(self):
+		appt = self._appt(appt_status=AppointmentStatus.COMPLETED)
+		response = self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+		appt.refresh_from_db()
+		self.assertEqual(appt.date, self.monday)
+
+	def test_no_show_cannot_be_rescheduled(self):
+		appt = self._appt(appt_status=AppointmentStatus.NO_SHOW)
+		response = self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+		appt.refresh_from_db()
+		self.assertEqual(appt.date, self.monday)
+
+	# ------------------------------------------------------------------ #
+	# Slot / working-hour validation tests                                 #
+	# ------------------------------------------------------------------ #
+
+	def test_past_date_rejected(self):
+		appt = self._appt()
+		response = self._reschedule(appt.id, date(2020, 1, 6), "10:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+		appt.refresh_from_db()
+		self.assertEqual(appt.date, self.monday)
+
+	def test_outside_working_hours_rejected(self):
+		appt = self._appt()
+		response = self._reschedule(appt.id, self.next_monday, "08:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+	def test_unaligned_slot_rejected(self):
+		appt = self._appt()
+		response = self._reschedule(appt.id, self.next_monday, "10:15:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+	def test_occupied_slot_rejected(self):
+		appt = self._appt(t="10:00:00")
+		Appointment.objects.create(
+			user=self.other_customer, specialist=self.specialist_a,
+			date=self.next_monday, time=time(11, 0), status=AppointmentStatus.PENDING,
+		)
+		response = self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+	def test_same_slot_rejected(self):
+		appt = self._appt(t="10:00:00")
+		response = self._reschedule(appt.id, self.monday, "10:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+	# ------------------------------------------------------------------ #
+	# Self-overlap exclusion (Step 9)                                      #
+	# ------------------------------------------------------------------ #
+
+	def test_reschedule_to_free_slot_not_blocked_by_self(self):
+		"""Appointment at 10:00 must not block reschedule to 11:00."""
+		appt = self._appt(t="10:00:00")
+		response = self._reschedule(appt.id, self.monday, "11:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	def test_cancelled_appointment_at_new_slot_does_not_block(self):
+		"""CANCELLED appointment at the target slot must not prevent rescheduling."""
+		appt = self._appt(t="10:00:00")
+		Appointment.objects.create(
+			user=self.other_customer, specialist=self.specialist_a,
+			date=self.next_monday, time=time(11, 0), status=AppointmentStatus.CANCELLED,
+		)
+		response = self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	# ------------------------------------------------------------------ #
+	# Atomicity (Step 10)                                                  #
+	# ------------------------------------------------------------------ #
+
+	def test_failed_reschedule_leaves_all_fields_unchanged(self):
+		appt = self._appt(t="10:00:00")
+		appt.notes = "Keep this"
+		appt.duration = 45
+		appt.save()
+		appt.refresh_from_db()  # normalize in-memory string fields to Python types
+		original_date = appt.date
+		original_time = appt.time
+		original_notes = appt.notes
+		original_duration = appt.duration
+		original_status = appt.status
+
+		self._reschedule(appt.id, date(2020, 1, 6), "10:00:00", self.customer)
+		appt.refresh_from_db()
+
+		self.assertEqual(appt.date, original_date)
+		self.assertEqual(appt.time, original_time)
+		self.assertEqual(appt.notes, original_notes)
+		self.assertEqual(appt.duration, original_duration)
+		self.assertEqual(appt.status, original_status)
+
+	# ------------------------------------------------------------------ #
+	# Boundary tests (Step 12)                                             #
+	# ------------------------------------------------------------------ #
+
+	def test_reschedule_to_exact_working_hour_start(self):
+		appt = self._appt(t="10:00:00")
+		response = self._reschedule(appt.id, self.next_monday, "09:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	def test_reschedule_to_last_valid_slot(self):
+		"""16:30 is the last 30-min slot ending exactly at 17:00."""
+		appt = self._appt(t="10:00:00")
+		response = self._reschedule(appt.id, self.next_monday, "16:30:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	def test_reschedule_to_end_of_working_hours_rejected(self):
+		"""17:00 is boundary-end; a 30-min slot starting there exceeds working hours."""
+		appt = self._appt(t="10:00:00")
+		response = self._reschedule(appt.id, self.next_monday, "17:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+	def test_back_to_back_appointments_allowed(self):
+		"""A slot adjacent to an existing appointment must be bookable."""
+		self._appt(t="09:00:00")
+		appt_b = self._appt(user=self.other_customer, t="11:00:00")
+		response = self._reschedule(appt_b.id, self.monday, "09:30:00", self.other_customer)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+	# ------------------------------------------------------------------ #
+	# Regression tests (Step 17)                                           #
+	# ------------------------------------------------------------------ #
+
+	def test_available_slots_still_works_after_reschedule(self):
+		appt = self._appt(t="09:00:00")
+		self._reschedule(appt.id, self.next_monday, "10:00:00", self.customer)
+		response = self.client.get(
+			f"/api/specialists/{self.specialist_a.id}/available-slots/",
+			{"date": self.monday},
+		)
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		self.assertIn("09:00", response.data["slots"])
+
+	def test_cancellation_releases_rescheduled_slot(self):
+		appt = self._appt(t="10:00:00")
+		self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		self.client.force_authenticate(user=self.customer)
+		self.client.patch(f"/api/appointments/{appt.id}/cancel/")
+		response = self.client.get(
+			f"/api/specialists/{self.specialist_a.id}/available-slots/",
+			{"date": self.next_monday},
+		)
+		self.assertIn("11:00", response.data["slots"])
+
+	def test_existing_lifecycle_transitions_unaffected(self):
+		"""Confirm/cancel/complete still work after reschedule feature is added."""
+		appt = self._appt(appt_status=AppointmentStatus.PENDING)
+		self.client.force_authenticate(user=self.admin)
+		response = self.client.patch(f"/api/appointments/{appt.id}/confirm/")
+		self.assertEqual(response.status_code, status.HTTP_200_OK)
+		appt.refresh_from_db()
+		self.assertEqual(appt.status, AppointmentStatus.CONFIRMED)
+
+	def test_specialist_cannot_create_appointment_regression(self):
+		"""Specialist creation restriction must remain intact."""
+		self.client.force_authenticate(user=self.spec_user_a)
+		response = self.client.post(
+			"/api/appointments/",
+			{"specialist": self.specialist_a.id, "date": self.monday, "time": "10:00:00"},
+			format="json",
+		)
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+

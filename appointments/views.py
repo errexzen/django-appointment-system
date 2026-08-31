@@ -1,5 +1,6 @@
-from rest_framework import generics, permissions, status
+from django.db import transaction
 from django.shortcuts import get_object_or_404
+from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -10,7 +11,11 @@ from appointments.permissions import (
 	IsNotSpecialist,
 	IsOwnerOrAdmin,
 )
-from appointments.serializers import AppointmentSerializer, AppointmentStatusSerializer
+from appointments.serializers import (
+	AppointmentRescheduleSerializer,
+	AppointmentSerializer,
+	AppointmentStatusSerializer,
+)
 
 
 class AppointmentListCreateView(generics.ListCreateAPIView):
@@ -99,5 +104,34 @@ class AppointmentNoShowView(APIView):
 		serializer.save()
 		return Response({"detail": "Appointment marked as no-show."}, status=status.HTTP_200_OK)
 
-		serializer.save()
-		return Response({"detail": "Appointment marked as no-show."}, status=status.HTTP_200_OK)
+
+class AppointmentRescheduleView(APIView):
+	permission_classes = [permissions.IsAuthenticated, IsAppointmentCanceller]
+
+	_RESCHEDULABLE = {AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED}
+
+	def patch(self, request, pk, *args, **kwargs):
+		appointment = get_object_or_404(Appointment, pk=pk)
+		self.check_object_permissions(request, appointment)
+
+		if appointment.status not in self._RESCHEDULABLE:
+			return Response(
+				{"detail": f"Cannot reschedule a '{appointment.status}' appointment."},
+				status=status.HTTP_400_BAD_REQUEST,
+			)
+
+		serializer = AppointmentRescheduleSerializer(
+			data=request.data,
+			context={"appointment": appointment, "request": request},
+		)
+		serializer.is_valid(raise_exception=True)
+
+		with transaction.atomic():
+			appointment.date = serializer.validated_data["date"]
+			appointment.time = serializer.validated_data["time"]
+			appointment.save()
+
+		return Response(
+			AppointmentSerializer(appointment, context={"request": request}).data,
+			status=status.HTTP_200_OK,
+		)
