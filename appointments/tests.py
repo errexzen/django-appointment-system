@@ -1149,6 +1149,13 @@ class AppointmentRescheduleTests(APITestCase):
 		appt.refresh_from_db()
 		self.assertEqual(appt.duration, 45)
 
+	def test_created_at_preserved(self):
+		appt = self._appt()
+		original_created_at = appt.created_at
+		self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		appt.refresh_from_db()
+		self.assertEqual(appt.created_at, original_created_at)
+
 	def test_status_unchanged_after_reschedule(self):
 		appt = self._appt(appt_status=AppointmentStatus.PENDING)
 		self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
@@ -1284,6 +1291,44 @@ class AppointmentRescheduleTests(APITestCase):
 			date=self.next_monday, time=time(11, 0), status=AppointmentStatus.PENDING,
 		)
 		response = self._reschedule(appt.id, self.next_monday, "11:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+	def test_duration_must_fit_inside_working_hours(self):
+		appt = self._appt(t="10:00:00")
+		appt.duration = 60
+		appt.save()
+		response = self._reschedule(appt.id, self.next_monday, "16:30:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+		appt.refresh_from_db()
+		self.assertEqual(appt.date, self.monday)
+
+	def test_partial_overlap_at_end_rejected(self):
+		appt = self._appt(t="09:00:00")
+		Appointment.objects.create(
+			user=self.other_customer, specialist=self.specialist_a,
+			date=self.next_monday, time=time(10, 45), duration=30,
+		)
+		response = self._reschedule(appt.id, self.next_monday, "10:30:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+	def test_rescheduled_interval_containing_existing_appointment_rejected(self):
+		appt = self._appt(t="09:00:00")
+		appt.duration = 90
+		appt.save()
+		Appointment.objects.create(
+			user=self.other_customer, specialist=self.specialist_a,
+			date=self.next_monday, time=time(10, 30), duration=30,
+		)
+		response = self._reschedule(appt.id, self.next_monday, "10:00:00", self.customer)
+		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+	def test_existing_interval_containing_rescheduled_appointment_rejected(self):
+		appt = self._appt(t="09:00:00")
+		Appointment.objects.create(
+			user=self.other_customer, specialist=self.specialist_a,
+			date=self.next_monday, time=time(10, 0), duration=120,
+		)
+		response = self._reschedule(appt.id, self.next_monday, "10:30:00", self.customer)
 		self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
 	def test_same_slot_rejected(self):
