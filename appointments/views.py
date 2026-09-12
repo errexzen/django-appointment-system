@@ -1,9 +1,8 @@
-from django.db import transaction
-from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from appointments import transactions as appointment_transactions
 from appointments.models import Appointment, AppointmentStatus
 from appointments.permissions import (
 	IsAdminOrAssignedSpecialist,
@@ -22,6 +21,10 @@ class AppointmentListCreateView(generics.ListCreateAPIView):
 	"""GET: admin-only list of all appointments. POST: authenticated users create appointments."""
 
 	serializer_class = AppointmentSerializer
+
+	def create(self, request, *args, **kwargs):
+		with appointment_transactions.mutation_transaction():
+			return super().create(request, *args, **kwargs)
 
 	def get_permissions(self):
 		if self.request.method == "GET":
@@ -45,15 +48,16 @@ class AppointmentCancelView(APIView):
 	permission_classes = [permissions.IsAuthenticated, IsAppointmentCanceller]
 
 	def patch(self, request, pk, *args, **kwargs):
-		appointment = get_object_or_404(Appointment, pk=pk)
-		self.check_object_permissions(request, appointment)
-		serializer = AppointmentStatusSerializer(
-			appointment,
-			data={"status": AppointmentStatus.CANCELLED},
-			partial=True,
-		)
-		serializer.is_valid(raise_exception=True)
-		serializer.save()
+		with appointment_transactions.mutation_transaction():
+			appointment = appointment_transactions.lock_appointment(pk)
+			self.check_object_permissions(request, appointment)
+			serializer = AppointmentStatusSerializer(
+				appointment,
+				data={"status": AppointmentStatus.CANCELLED},
+				partial=True,
+			)
+			serializer.is_valid(raise_exception=True)
+			serializer.save()
 		return Response({"detail": "Appointment cancelled successfully."}, status=status.HTTP_200_OK)
 
 
@@ -61,15 +65,16 @@ class AppointmentConfirmView(APIView):
 	permission_classes = [IsAdminOrAssignedSpecialist]
 
 	def patch(self, request, pk, *args, **kwargs):
-		appointment = get_object_or_404(Appointment, pk=pk)
-		self.check_object_permissions(request, appointment)
-		serializer = AppointmentStatusSerializer(
-			appointment,
-			data={"status": AppointmentStatus.CONFIRMED},
-			partial=True,
-		)
-		serializer.is_valid(raise_exception=True)
-		serializer.save()
+		with appointment_transactions.mutation_transaction():
+			appointment = appointment_transactions.lock_appointment(pk)
+			self.check_object_permissions(request, appointment)
+			serializer = AppointmentStatusSerializer(
+				appointment,
+				data={"status": AppointmentStatus.CONFIRMED},
+				partial=True,
+			)
+			serializer.is_valid(raise_exception=True)
+			serializer.save()
 		return Response({"detail": "Appointment confirmed successfully."}, status=status.HTTP_200_OK)
 
 
@@ -77,15 +82,16 @@ class AppointmentCompleteView(APIView):
 	permission_classes = [IsAdminOrAssignedSpecialist]
 
 	def patch(self, request, pk, *args, **kwargs):
-		appointment = get_object_or_404(Appointment, pk=pk)
-		self.check_object_permissions(request, appointment)
-		serializer = AppointmentStatusSerializer(
-			appointment,
-			data={"status": AppointmentStatus.COMPLETED},
-			partial=True,
-		)
-		serializer.is_valid(raise_exception=True)
-		serializer.save()
+		with appointment_transactions.mutation_transaction():
+			appointment = appointment_transactions.lock_appointment(pk)
+			self.check_object_permissions(request, appointment)
+			serializer = AppointmentStatusSerializer(
+				appointment,
+				data={"status": AppointmentStatus.COMPLETED},
+				partial=True,
+			)
+			serializer.is_valid(raise_exception=True)
+			serializer.save()
 		return Response({"detail": "Appointment marked as completed."}, status=status.HTTP_200_OK)
 
 
@@ -93,15 +99,16 @@ class AppointmentNoShowView(APIView):
 	permission_classes = [IsAdminOrAssignedSpecialist]
 
 	def patch(self, request, pk, *args, **kwargs):
-		appointment = get_object_or_404(Appointment, pk=pk)
-		self.check_object_permissions(request, appointment)
-		serializer = AppointmentStatusSerializer(
-			appointment,
-			data={"status": AppointmentStatus.NO_SHOW},
-			partial=True,
-		)
-		serializer.is_valid(raise_exception=True)
-		serializer.save()
+		with appointment_transactions.mutation_transaction():
+			appointment = appointment_transactions.lock_appointment(pk)
+			self.check_object_permissions(request, appointment)
+			serializer = AppointmentStatusSerializer(
+				appointment,
+				data={"status": AppointmentStatus.NO_SHOW},
+				partial=True,
+			)
+			serializer.is_valid(raise_exception=True)
+			serializer.save()
 		return Response({"detail": "Appointment marked as no-show."}, status=status.HTTP_200_OK)
 
 
@@ -111,25 +118,25 @@ class AppointmentRescheduleView(APIView):
 	_RESCHEDULABLE = {AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED}
 
 	def patch(self, request, pk, *args, **kwargs):
-		appointment = get_object_or_404(Appointment, pk=pk)
-		self.check_object_permissions(request, appointment)
+		with appointment_transactions.mutation_transaction():
+			appointment = appointment_transactions.lock_appointment(pk, schedule=True)
+			self.check_object_permissions(request, appointment)
 
-		if appointment.status not in self._RESCHEDULABLE:
-			return Response(
-				{"detail": f"Cannot reschedule a '{appointment.status}' appointment."},
-				status=status.HTTP_400_BAD_REQUEST,
+			if appointment.status not in self._RESCHEDULABLE:
+				return Response(
+					{"detail": f"Cannot reschedule a '{appointment.status}' appointment."},
+					status=status.HTTP_400_BAD_REQUEST,
+				)
+
+			serializer = AppointmentRescheduleSerializer(
+				data=request.data,
+				context={"appointment": appointment, "request": request},
 			)
+			serializer.is_valid(raise_exception=True)
 
-		serializer = AppointmentRescheduleSerializer(
-			data=request.data,
-			context={"appointment": appointment, "request": request},
-		)
-		serializer.is_valid(raise_exception=True)
-
-		with transaction.atomic():
 			appointment.date = serializer.validated_data["date"]
 			appointment.time = serializer.validated_data["time"]
-			appointment.save()
+			appointment.save(update_fields=["date", "time", "updated_at"])
 
 		return Response(
 			AppointmentSerializer(appointment, context={"request": request}).data,

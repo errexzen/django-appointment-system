@@ -1,6 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
 
+from appointments import transactions as appointment_transactions
 from appointments.models import ALLOWED_TRANSITIONS, Appointment
 from appointments.scheduling import scheduling_context, scheduling_error
 
@@ -48,6 +49,13 @@ class AppointmentSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
+        # The creation view owns the transaction, including initial validation.
+        validated_data["specialist"] = appointment_transactions.lock_specialist(
+            validated_data["specialist"].pk,
+        )
+        # Initial DRF validation is advisory: occupancy and specialist data
+        # must be checked again after acquiring the scheduling lock.
+        self.validate(validated_data)
         validated_data["user"] = self.context["request"].user
         if "duration" not in validated_data:
             validated_data["duration"] = validated_data["specialist"].slot_duration
@@ -69,6 +77,11 @@ class AppointmentStatusSerializer(serializers.ModelSerializer):
                 f"Cannot transition appointment from '{current}' to '{new_status}'."
             )
         return new_status
+
+    def update(self, instance, validated_data):
+        instance.status = validated_data["status"]
+        instance.save(update_fields=["status", "updated_at"])
+        return instance
 
 
 class AppointmentRescheduleSerializer(serializers.Serializer):
