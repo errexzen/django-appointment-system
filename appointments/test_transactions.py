@@ -11,6 +11,7 @@ from django.db import IntegrityError, OperationalError, connection, connections
 from django.utils import timezone
 from rest_framework.test import APIClient, APITestCase, APITransactionTestCase
 
+from accounts.models import UserRole
 from appointments import transactions as mutations
 from appointments.models import Appointment, AppointmentStatus
 from appointments.serializers import AppointmentSerializer
@@ -19,7 +20,8 @@ from specialists.models import Specialist, WorkingHour
 
 class MutationFixtures:
     def make_fixtures(self):
-        self.user = get_user_model().objects.create_user("mutation-admin", is_staff=True)
+        self.user = get_user_model().objects.create_user("mutation-customer", role=UserRole.CUSTOMER)
+        self.admin = get_user_model().objects.create_user("mutation-admin", role=UserRole.ADMIN)
         self.specialist = Specialist.objects.create(name="Mutation specialist", profession="GP")
         self.day = timezone.localdate() + timedelta(days=7)
         WorkingHour.objects.create(
@@ -48,6 +50,8 @@ class MutationFixtures:
 
     def request(self, operation, client=None):
         method, url, data = operation
+        if client is None:
+            self.client.force_authenticate(self.user if method == "post" else self.admin)
         return getattr(client or self.client, method)(url, data, format="json")
 
 
@@ -311,7 +315,8 @@ class PostgreSQLMutationRaceTests(MutationFixtures, APITransactionTestCase):
                     cursor.execute("SELECT pg_backend_pid()")
                     pids[label] = cursor.fetchone()[0]
                 client = APIClient()
-                client.force_authenticate(get_user_model().objects.get(pk=self.user.pk))
+                actor = self.user if operation[0] == "post" else self.admin
+                client.force_authenticate(get_user_model().objects.get(pk=actor.pk))
                 response = self.request(operation, client)
                 return response.status_code, response.data
             finally:

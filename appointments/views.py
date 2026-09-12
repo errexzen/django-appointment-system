@@ -2,13 +2,12 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.permissions import IsCustomer, IsOwnerOrAdmin
 from appointments import transactions as appointment_transactions
 from appointments.models import Appointment, AppointmentStatus
 from appointments.permissions import (
 	IsAdminOrAssignedSpecialist,
 	IsAppointmentCanceller,
-	IsNotSpecialist,
-	IsOwnerOrAdmin,
 )
 from appointments.serializers import (
 	AppointmentRescheduleSerializer,
@@ -18,7 +17,7 @@ from appointments.serializers import (
 
 
 class AppointmentListCreateView(generics.ListCreateAPIView):
-	"""GET: admin-only list of all appointments. POST: authenticated users create appointments."""
+	"""GET: owner/admin list of all appointments. POST: customer bookings."""
 
 	serializer_class = AppointmentSerializer
 
@@ -28,9 +27,8 @@ class AppointmentListCreateView(generics.ListCreateAPIView):
 
 	def get_permissions(self):
 		if self.request.method == "GET":
-			return [permissions.IsAdminUser()]
-		# POST: authenticated non-specialists only
-		return [permissions.IsAuthenticated(), IsNotSpecialist()]
+			return [IsOwnerOrAdmin()]
+		return [permissions.IsAuthenticated(), IsCustomer()]
 
 	def get_queryset(self):
 		return Appointment.objects.select_related("user", "specialist").all()

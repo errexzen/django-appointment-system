@@ -13,6 +13,7 @@ from rest_framework import generics, permissions, serializers as rf_serializers,
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.permissions import IsOwnerOrAdmin
 from appointments.models import Appointment
 from appointments.scheduling import scheduling_context, scheduling_error
 from appointments.serializers import AppointmentSerializer
@@ -32,7 +33,7 @@ class SpecialistListView(generics.ListCreateAPIView):
 
 	def get_permissions(self):
 		if self.request.method == "POST":
-			return [permissions.IsAdminUser()]
+			return [IsOwnerOrAdmin()]
 		return [permissions.AllowAny()]
 
 
@@ -42,12 +43,12 @@ class SpecialistDetailView(generics.RetrieveUpdateDestroyAPIView):
 
 	def get_permissions(self):
 		if self.request.method in ["PUT", "PATCH", "DELETE"]:
-			return [permissions.IsAdminUser()]
+			return [IsOwnerOrAdmin()]
 		return [permissions.AllowAny()]
 
 
 class SpecialistWorkingHoursView(generics.ListCreateAPIView):
-	"""GET: public list of working hours. POST: admin-only creation."""
+	"""GET: public working hours. POST: owner/admin creation."""
 
 	def get_serializer_class(self):
 		if self.request.method == "POST":
@@ -56,7 +57,7 @@ class SpecialistWorkingHoursView(generics.ListCreateAPIView):
 
 	def get_permissions(self):
 		if self.request.method == "POST":
-			return [permissions.IsAdminUser()]
+			return [IsOwnerOrAdmin()]
 		return [permissions.AllowAny()]
 
 	def get_queryset(self):
@@ -74,7 +75,7 @@ class SpecialistWorkingHoursView(generics.ListCreateAPIView):
 
 
 class SpecialistWorkingHourDeleteView(generics.DestroyAPIView):
-	permission_classes = [permissions.IsAdminUser]
+	permission_classes = [IsOwnerOrAdmin]
 
 	def get_object(self):
 		# Ensures the working hour belongs to the specialist in the URL.
@@ -172,8 +173,8 @@ class SpecialistAvailableSlotsView(APIView):
 class SpecialistAppointmentsView(generics.ListAPIView):
 	"""
 	GET /api/specialists/<pk>/appointments/
-	Admin can view any specialist's appointments.
-	A specialist user can only view their own appointments (linked via specialist_profile).
+	Owner/admin roles can view any specialist's appointments.
+	Specialist role requires a matching specialist_profile.
 	"""
 
 	serializer_class = AppointmentSerializer

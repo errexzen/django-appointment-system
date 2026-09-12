@@ -24,7 +24,7 @@ class AppointmentAPITests(APITestCase):
 	def setUp(self):
 		self.user = User.objects.create_user("user1", password="strongpass123")
 		self.other_user = User.objects.create_user("user2", password="strongpass123")
-		self.admin = User.objects.create_superuser("admin", "admin@example.com", "adminpass123")
+		self.admin = User.objects.create_superuser("admin", "admin@example.com", "adminpass123", role=UserRole.ADMIN)
 		self.specialist = Specialist.objects.create(name="Dr. House", profession="General")
 		WorkingHour.objects.create(
 			specialist=self.specialist,
@@ -170,7 +170,7 @@ class AppointmentFieldTests(APITestCase):
 
 	def setUp(self):
 		self.user = User.objects.create_user("user1", password="strongpass123")
-		self.admin = User.objects.create_superuser("admin", "admin@example.com", "adminpass123")
+		self.admin = User.objects.create_superuser("admin", "admin@example.com", "adminpass123", role=UserRole.ADMIN)
 		self.specialist = Specialist.objects.create(name="Dr. Field", profession="General", slot_duration=30)
 		WorkingHour.objects.create(
 			specialist=self.specialist,
@@ -281,7 +281,7 @@ class AppointmentLifecycleTests(APITestCase):
 
 	def setUp(self):
 		self.user = User.objects.create_user("user1", password="strongpass123")
-		self.admin = User.objects.create_superuser("admin", "admin@example.com", "adminpass123")
+		self.admin = User.objects.create_superuser("admin", "admin@example.com", "adminpass123", role=UserRole.ADMIN)
 		self.specialist = Specialist.objects.create(name="Dr. Lifecycle", profession="General")
 		WorkingHour.objects.create(
 			specialist=self.specialist,
@@ -546,7 +546,7 @@ class CustomerPermissionTests(APITestCase):
 	def setUp(self):
 		self.customer = User.objects.create_user("customer", password="pass123", role=UserRole.CUSTOMER)
 		self.other_customer = User.objects.create_user("other", password="pass123", role=UserRole.CUSTOMER)
-		self.admin = User.objects.create_superuser("admin", "a@example.com", "pass123")
+		self.admin = User.objects.create_superuser("admin", "a@example.com", "pass123", role=UserRole.ADMIN)
 		self.specialist = Specialist.objects.create(name="Dr. K", profession="GP")
 		WorkingHour.objects.create(
 			specialist=self.specialist, day=Weekday.MONDAY,
@@ -664,7 +664,7 @@ class SpecialistPermissionTests(APITestCase):
 
 	def setUp(self):
 		self.customer = User.objects.create_user("customer", password="pass123")
-		self.admin = User.objects.create_superuser("admin", "a@example.com", "pass123")
+		self.admin = User.objects.create_superuser("admin", "a@example.com", "pass123", role=UserRole.ADMIN)
 
 		# Two specialists with linked user accounts
 		self.specialist_a = Specialist.objects.create(name="Dr. A", profession="GP")
@@ -832,12 +832,12 @@ class SpecialistPermissionTests(APITestCase):
 
 
 class AppointmentCreationAuthorizationTests(APITestCase):
-	"""Regression: customer creation still works; admin creation still works."""
+	"""Customer booking succeeds; administrative roles cannot use customer booking."""
 
 	def setUp(self):
 		self.customer_a = User.objects.create_user("cust_a", password="pass123")
 		self.customer_b = User.objects.create_user("cust_b", password="pass123")
-		self.admin = User.objects.create_superuser("admin", "a@example.com", "pass123")
+		self.admin = User.objects.create_superuser("admin", "a@example.com", "pass123", role=UserRole.ADMIN)
 		self.specialist = Specialist.objects.create(name="Dr. R", profession="GP")
 		WorkingHour.objects.create(
 			specialist=self.specialist, day=Weekday.MONDAY,
@@ -855,22 +855,23 @@ class AppointmentCreationAuthorizationTests(APITestCase):
 		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 		self.assertEqual(Appointment.objects.get().user, self.customer_a)
 
-	def test_admin_can_create_appointment(self):
+	def test_admin_cannot_create_customer_appointment(self):
 		self.client.force_authenticate(user=self.admin)
 		response = self.client.post(
 			"/api/appointments/",
 			{"specialist": self.specialist.id, "date": self.monday, "time": "10:00:00"},
 			format="json",
 		)
-		self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+		self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+		self.assertFalse(Appointment.objects.exists())
 
 
 class AdminPermissionTests(APITestCase):
-	"""Admins (is_staff) have full appointment management access."""
+	"""Admin roles have full appointment management access."""
 
 	def setUp(self):
 		self.customer = User.objects.create_user("customer", password="pass123")
-		self.admin = User.objects.create_superuser("admin", "a@example.com", "pass123")
+		self.admin = User.objects.create_superuser("admin", "a@example.com", "pass123", role=UserRole.ADMIN)
 		self.specialist = Specialist.objects.create(name="Dr. K", profession="GP")
 		WorkingHour.objects.create(
 			specialist=self.specialist, day=Weekday.MONDAY,
@@ -1045,7 +1046,7 @@ class AppointmentRescheduleTests(APITestCase):
 	def setUp(self):
 		self.customer = User.objects.create_user("customer", password="pass123")
 		self.other_customer = User.objects.create_user("other_customer", password="pass123")
-		self.admin = User.objects.create_superuser("admin", "a@example.com", "pass123")
+		self.admin = User.objects.create_superuser("admin", "a@example.com", "pass123", role=UserRole.ADMIN)
 
 		self.specialist_a = Specialist.objects.create(name="Dr. A", profession="GP", slot_duration=30)
 		self.specialist_b = Specialist.objects.create(name="Dr. B", profession="Dentist", slot_duration=30)

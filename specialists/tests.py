@@ -4,6 +4,7 @@ from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from accounts.models import UserRole
 from specialists.models import Specialist, WorkingHour, Weekday
 from appointments.models import Appointment, AppointmentStatus
 
@@ -27,7 +28,7 @@ class SpecialistAPITests(APITestCase):
 			profession="Cardiologist",
 			description="Heart specialist",
 		)
-		self.admin = User.objects.create_superuser("admin", "admin@example.com", "adminpass123")
+		self.admin = User.objects.create_superuser("admin", "admin@example.com", "adminpass123", role=UserRole.ADMIN)
 
 	def test_list_specialists(self):
 		response = self.client.get("/api/specialists/")
@@ -109,7 +110,7 @@ class SpecialistAPITests(APITestCase):
 class WorkingHourWriteAPITests(APITestCase):
 	def setUp(self):
 		self.specialist = Specialist.objects.create(name="Dr. House", profession="General")
-		self.admin = User.objects.create_superuser("admin", "admin@example.com", "adminpass123")
+		self.admin = User.objects.create_superuser("admin", "admin@example.com", "adminpass123", role=UserRole.ADMIN)
 		self.user = User.objects.create_user("patient", password="strongpass123")
 
 	# ------------------------------------------------------------------ #
