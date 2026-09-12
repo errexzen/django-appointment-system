@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -13,7 +13,8 @@ from rest_framework import generics, permissions, serializers as rf_serializers,
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from appointments.models import Appointment, AppointmentStatus
+from appointments.models import Appointment
+from appointments.scheduling import scheduling_context, scheduling_error
 from appointments.serializers import AppointmentSerializer
 from specialists.models import Specialist, WorkingHour
 from specialists.permissions import IsAdminOrLinkedSpecialist
@@ -142,31 +143,23 @@ class SpecialistAvailableSlotsView(APIView):
 				status=status.HTTP_400_BAD_REQUEST,
 			)
 
-		weekday = requested_date.weekday()
-		working_hours = WorkingHour.objects.filter(
-			specialist=specialist, day=weekday
-		).order_by("start_time")
-
+		working, occupied = scheduling_context(specialist, requested_date)
 		slot_duration = specialist.slot_duration
 		delta = timedelta(minutes=slot_duration)
-		all_slots: set[datetime] = set()
+		all_slots = set()
 
-		for wh in working_hours:
-			current = datetime.combine(date.min, wh.start_time)
-			end = datetime.combine(date.min, wh.end_time)
-			while current + delta <= end:
+		for start, end in working:
+			current = start
+			while slot_duration > 0 and delta <= end - current:
 				all_slots.add(current.time())
 				current += delta
 
-		booked_times = set(
-			Appointment.objects.filter(
-				specialist=specialist,
-				date=requested_date,
-				status__in=[AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED],
-			).values_list("time", flat=True)
+		available = sorted(
+			time for time in all_slots
+			if scheduling_error(
+				requested_date, time, slot_duration, slot_duration, working, occupied,
+			) is None
 		)
-
-		available = sorted(all_slots - booked_times)
 
 		return Response({
 			"specialist": specialist.id,

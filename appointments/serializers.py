@@ -1,10 +1,8 @@
-from datetime import datetime, timedelta
-
 from django.utils import timezone
 from rest_framework import serializers
 
-from appointments.models import ALLOWED_TRANSITIONS, Appointment, AppointmentStatus
-from specialists.models import WorkingHour
+from appointments.models import ALLOWED_TRANSITIONS, Appointment
+from appointments.scheduling import scheduling_context, scheduling_error
 
 
 class AppointmentSerializer(serializers.ModelSerializer):
@@ -39,37 +37,13 @@ class AppointmentSerializer(serializers.ModelSerializer):
         if date == timezone.localdate() and time <= timezone.localtime().time():
             raise serializers.ValidationError("Cannot book an appointment at a past time today.")
 
-        weekday = date.weekday()
-        working_hours = WorkingHour.objects.filter(
-            specialist=specialist,
-            day=weekday,
-            start_time__lte=time,
-            end_time__gt=time,
+        working, occupied = scheduling_context(specialist, date)
+        error = scheduling_error(
+            date, time, attrs.get("duration", specialist.slot_duration),
+            specialist.slot_duration, working, occupied,
         )
-        if not working_hours.exists():
-            raise serializers.ValidationError("Selected time is outside specialist working hours.")
-
-        slot_duration = specialist.slot_duration
-        def _minutes(t):
-            return t.hour * 60 + t.minute
-
-        aligned = any(
-            (_minutes(time) - _minutes(wh.start_time)) % slot_duration == 0
-            for wh in working_hours
-        )
-        if not aligned:
-            raise serializers.ValidationError(
-                f"Selected time does not align with the {slot_duration}-minute slot grid."
-            )
-
-        duplicate_exists = Appointment.objects.filter(
-            specialist=specialist,
-            date=date,
-            time=time,
-            status__in=[AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED],
-        ).exists()
-        if duplicate_exists:
-            raise serializers.ValidationError("This slot is already booked.")
+        if error:
+            raise serializers.ValidationError(error)
 
         return attrs
 
@@ -118,44 +92,14 @@ class AppointmentRescheduleSerializer(serializers.Serializer):
         if new_date == timezone.localdate() and new_time <= timezone.localtime().time():
             raise serializers.ValidationError("Cannot reschedule to a past time today.")
 
-        weekday = new_date.weekday()
-        working_hours = WorkingHour.objects.filter(
-            specialist=specialist,
-            day=weekday,
+        working, occupied = scheduling_context(
+            specialist, new_date, exclude_pk=appointment.pk,
         )
-        new_start = datetime.combine(new_date, new_time)
-        new_end = new_start + timedelta(minutes=appointment.duration)
-        fits_working_hours = any(
-            wh.start_time <= new_time and new_end.time() <= wh.end_time
-            and new_end.date() == new_date
-            for wh in working_hours
+        error = scheduling_error(
+            new_date, new_time, appointment.duration,
+            specialist.slot_duration, working, occupied,
         )
-        if not fits_working_hours:
-            raise serializers.ValidationError("Selected time is outside specialist working hours.")
-
-        def _minutes(t):
-            return t.hour * 60 + t.minute
-
-        slot_duration = specialist.slot_duration
-        aligned = any(
-            wh.start_time <= new_time
-            and (_minutes(new_time) - _minutes(wh.start_time)) % slot_duration == 0
-            for wh in working_hours
-        )
-        if not aligned:
-            raise serializers.ValidationError(
-                f"Selected time does not align with the {slot_duration}-minute slot grid."
-            )
-
-        active_appointments = Appointment.objects.filter(
-            specialist=specialist,
-            date=new_date,
-            status__in=[AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED],
-        ).exclude(pk=appointment.pk)
-        for other in active_appointments:
-            other_start = datetime.combine(other.date, other.time)
-            other_end = other_start + timedelta(minutes=other.duration)
-            if new_start < other_end and other_start < new_end:
-                raise serializers.ValidationError("This slot overlaps an existing appointment.")
+        if error:
+            raise serializers.ValidationError(error)
 
         return attrs
