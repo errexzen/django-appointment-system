@@ -1,151 +1,138 @@
-# appointment_system
+# Schedula
 
-Professional appointment booking backend built with Django and Django REST Framework.
+Production-ready multi-tenant appointment booking SaaS built with Django, DRF, Celery, PostgreSQL, Redis, and a hybrid web/API architecture.
 
-## Project Description
+## Live demo
+Coming soon.
 
-`appointment_system` is an API-first appointment reservation platform where users can register, authenticate with JWT, browse specialists, view specialist working hours, and book/cancel appointments.
+## Screenshots
+See `docs/SCREENSHOTS.md`.
 
-The project follows clean architecture principles with separated apps:
+## Main features
+- Multi-tenant organizations with strict data isolation
+- Email-first custom user model and JWT authentication
+- Organization memberships, roles, and invitation workflow
+- Service catalog and staff assignment
+- Weekly availability, exceptions, holidays, and time off
+- Concurrency-safe booking engine with overlap protection
+- Waitlist and booking activity/status history
+- Notification logs and async email delivery via Celery
+- Plan and subscription foundations with limit enforcement hooks
+- Versioned API under `/api/v1/`
+- OpenAPI, Swagger UI, and ReDoc
+- Health and readiness endpoints
+- Dockerized local stack with PostgreSQL + Redis + worker + beat
 
-- `accounts`
-- `specialists`
-- `appointments`
-- `config` (project core)
-
-## Features
-
-- Custom user model with phone number field
-- Registration, login, logout, profile endpoints
-- JWT authentication via Simple JWT
-- Specialist CRUD (admin write, public read)
-- Specialist profession search
-- Working hour management for specialists
-- Appointment booking workflow with statuses (`pending`, `confirmed`, `cancelled`)
-- Duplicate slot prevention for active appointments
-- Working-hours validation for booking
-- Django admin customization (filters/search)
-- OpenAPI/Swagger docs using drf-spectacular
-- Automated tests for core use cases
-
-## Tech Stack
-
-- Python
-- Django
+## Technology stack
+- Python 3.14
+- Django 6
 - Django REST Framework
 - Simple JWT
 - drf-spectacular
-- SQLite (development)
-- PostgreSQL-ready configuration via environment variables
+- PostgreSQL (primary)
+- Redis, Celery, Celery Beat
+- HTMX, Alpine.js, Tailwind CSS, Chart.js
+- pytest, factory_boy, coverage
+- Ruff, Black, isort, pre-commit
 
-## Installation Steps
+## Architecture overview
+See:
+- `docs/ARCHITECTURE.md`
+- `docs/BOOKING_ENGINE.md`
+- `docs/API.md`
 
-1. Clone repository:
+## Multi-tenant architecture
+Tenant boundary is `Organization`. Every tenant-owned model is organization-scoped and filtered through organization-aware selectors and permission checks.
 
-```bash
-git clone <your-repo-url>
-cd django-appointment-system
-```
+## Project structure
+- `accounts` auth and user lifecycle
+- `organizations` tenant model, memberships, invitations
+- `services` categories and services
+- `staff` staff profiles
+- `scheduling` availability/holiday/time-off
+- `bookings` booking engine, customers, waitlist
+- `notifications` notification logs and email tasks
+- `subscriptions` plans and subscriptions
+- `dashboard` analytics selectors and endpoints
+- `core` shared models, health endpoints, audit helpers
+- `api` v1 router composition
 
-2. Create virtual environment and activate:
-
+## Local installation
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
-```
-
-3. Install dependencies:
-
-```bash
 pip install -r requirements.txt
-```
-
-4. Create env file:
-
-```bash
 copy .env.example .env
-```
-
-5. Run migrations:
-
-```bash
 python manage.py migrate
-```
-
-6. Create superuser:
-
-```bash
-python manage.py createsuperuser
-```
-
-7. Start development server:
-
-```bash
+python manage.py seed_demo
 python manage.py runserver
 ```
 
-## Environment Setup
-
-Main environment variables:
-
-- `SECRET_KEY`
-- `DEBUG`
-- `ALLOWED_HOSTS`
-- `TIME_ZONE`
-- `DB_ENGINE` (`sqlite` or `postgres`)
-- `POSTGRES_DB`
-- `POSTGRES_USER`
-- `POSTGRES_PASSWORD`
-- `POSTGRES_HOST`
-- `POSTGRES_PORT`
-- `JWT_ACCESS_MINUTES`
-- `JWT_REFRESH_DAYS`
-
-## API Documentation
-
-- Swagger UI: `/api/docs/`
-- OpenAPI schema: `/api/schema/`
-
-## Main API Endpoints
-
-Authentication:
-
-- `POST /api/register/`
-- `POST /api/login/`
-- `POST /api/logout/`
-- `GET /api/profile/`
-
-Specialists:
-
-- `GET /api/specialists/`
-- `GET /api/specialists/<id>/`
-- `GET /api/specialists/<id>/working-hours/`
-
-Appointments:
-
-- `POST /api/appointments/`
-- `GET /api/my-appointments/`
-- `PATCH /api/appointments/<id>/cancel/`
-- `PATCH /api/appointments/<id>/confirm/` (admin only)
-
-## Running Tests
-
+## Docker installation
 ```bash
-python manage.py test
+cp .env.example .env
+docker compose up --build
+docker compose exec web python manage.py migrate
+docker compose exec web python manage.py seed_demo
 ```
 
-## Screenshots
+## Environment variables
+Use `.env.example` as baseline. Key variables:
+- `DJANGO_SECRET_KEY`
+- `DJANGO_DEBUG`
+- `DJANGO_ALLOWED_HOSTS`
+- `DATABASE_URL`
+- `REDIS_URL`
+- `CELERY_BROKER_URL`
+- `CELERY_RESULT_BACKEND`
+- `EMAIL_*`
+- `DEFAULT_FROM_EMAIL`
+- `APP_BASE_URL`
 
-Add screenshots in this section when UI clients or admin customizations are showcased:
+## Database setup
+Primary database is PostgreSQL (`DATABASE_URL`).
+SQLite remains available as fallback when `DATABASE_URL` is omitted.
 
-- Admin specialist management page
-- Swagger docs page
-- Example appointment flow response screenshots
+## Running Celery
+```bash
+celery -A config worker -l info
+celery -A config beat -l info
+```
 
-## Future Improvements
+## Tests
+```bash
+pytest
+pytest --cov=. --cov-report=html --cov-report=term
+```
 
-- Add time-slot generation endpoint for each specialist/day
-- Add email/SMS notification service for appointment status updates
-- Add rate limiting and audit logging
-- Add Docker and CI/CD pipelines
-- Add role-based permissions with `doctor`, `patient`, `staff` roles
+## API docs
+- Schema: `/api/schema/`
+- Swagger: `/api/docs/`
+- ReDoc: `/api/redoc/`
+
+## Demo credentials
+After `python manage.py seed_demo`:
+- Admin: `admin@schedula.local` / `Admin12345!`
+- Owner: `owner@demo.local` / `Owner12345!`
+- Manager: `manager@demo.local` / `Manager12345!`
+- Staff: `staff@demo.local` / `Staff12345!`
+- Customer: `customer@demo.local` / `Customer12345!`
+
+Development-only credentials. Change immediately outside local/demo.
+
+## Deployment
+See `docs/DEPLOYMENT.md`.
+
+## Security
+See `SECURITY.md` and `docs/SECURITY.md`.
+
+## Roadmap
+- Billing provider integration (Stripe adapters)
+- Rich calendar UI (week/day/month)
+- Advanced reminder strategies and SMS channels
+
+## Contributing
+See `CONTRIBUTING.md`.
+
+## License
+MIT

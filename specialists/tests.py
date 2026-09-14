@@ -28,17 +28,21 @@ class SpecialistAPITests(APITestCase):
 			profession="Cardiologist",
 			description="Heart specialist",
 		)
+<<<<<<< Updated upstream
 		self.admin = User.objects.create_superuser("admin", "admin@example.com", "adminpass123", role=UserRole.ADMIN)
+=======
+		self.admin = User.objects.create_superuser(email="admin@example.com", password="adminpass123")
+>>>>>>> Stashed changes
 
 	def test_list_specialists(self):
 		response = self.client.get("/api/specialists/")
 		self.assertEqual(response.status_code, status.HTTP_200_OK)
-		self.assertEqual(len(response.data), 1)
+		self.assertEqual(len(response.data.get("results", [])), 1)
 
 	def test_search_specialists_by_profession(self):
 		response = self.client.get("/api/specialists/?search=Cardio")
 		self.assertEqual(response.status_code, status.HTTP_200_OK)
-		self.assertEqual(len(response.data), 1)
+		self.assertEqual(len(response.data.get("results", [])), 1)
 
 	def test_search_specialists_by_name(self):
 		response = self.client.get("/api/specialists/?search=Smith")
@@ -46,7 +50,7 @@ class SpecialistAPITests(APITestCase):
 		self.assertEqual(len(response.data), 1)
 
 	def test_non_admin_cannot_create_specialist(self):
-		user = User.objects.create_user("normal", password="strongpass123")
+		user = User.objects.create_user(email="normal@example.com", password="strongpass123")
 		self.client.force_authenticate(user=user)
 		response = self.client.post(
 			"/api/specialists/",

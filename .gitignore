@@ -183,3 +183,9 @@ cython_debug/
 # Project-generated files
 media/
 staticfiles/
+
+# Local accidental nested copy
+django-appointment-system/
+
+# Dev artifacts
+*.sqlite3

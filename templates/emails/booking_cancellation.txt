@@ -1,0 +1,5 @@
+Your booking has been cancelled.
+
+Reference: {{ booking.reference }}
+Service: {{ booking.service.name }}
+Date: {{ booking.start_datetime }}

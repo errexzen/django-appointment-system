@@ -1,0 +1,7 @@
+Your booking is confirmed.
+
+Reference: {{ booking.reference }}
+Service: {{ booking.service.name }}
+Date: {{ booking.start_datetime }}
+
+Thank you for using Schedula.
