@@ -28,11 +28,7 @@ class SpecialistAPITests(APITestCase):
 			profession="Cardiologist",
 			description="Heart specialist",
 		)
-<<<<<<< Updated upstream
-		self.admin = User.objects.create_superuser("admin", "admin@example.com", "adminpass123", role=UserRole.ADMIN)
-=======
-		self.admin = User.objects.create_superuser(email="admin@example.com", password="adminpass123")
->>>>>>> Stashed changes
+		self.admin = User.objects.create_superuser(email="admin@example.com", password="adminpass123", role=UserRole.ADMIN)
 
 	def test_list_specialists(self):
 		response = self.client.get("/api/specialists/")

@@ -22,15 +22,9 @@ def next_weekday(weekday: int) -> date:
 
 class AppointmentAPITests(APITestCase):
 	def setUp(self):
-<<<<<<< Updated upstream
-		self.user = User.objects.create_user("user1", password="strongpass123")
-		self.other_user = User.objects.create_user("user2", password="strongpass123")
-		self.admin = User.objects.create_superuser("admin", "admin@example.com", "adminpass123", role=UserRole.ADMIN)
-=======
 		self.user = User.objects.create_user(email="user1@example.com", password="strongpass123")
 		self.other_user = User.objects.create_user(email="user2@example.com", password="strongpass123")
-		self.admin = User.objects.create_superuser(email="admin@example.com", password="adminpass123")
->>>>>>> Stashed changes
+		self.admin = User.objects.create_superuser(email="admin@example.com", password="adminpass123", role=UserRole.ADMIN)
 		self.specialist = Specialist.objects.create(name="Dr. House", profession="General")
 		WorkingHour.objects.create(
 			specialist=self.specialist,

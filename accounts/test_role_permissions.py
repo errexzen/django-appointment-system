@@ -357,7 +357,7 @@ class RolePolicyAPITests(APITestCase):
     def test_role_change_is_enforced_with_existing_jwt(self):
         self.authenticate(None)
         response = self.client.post("/api/login/", {
-            "username": self.customer.username, "password": "StrongRolePass123",
+            "email": self.customer.email, "password": "StrongRolePass123",
         }, format="json")
         self.assertEqual(response.status_code, 200, response.data)
         self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {response.data['access']}")
@@ -371,11 +371,11 @@ class RolePolicyAPITests(APITestCase):
     def assert_registration_cannot_elevate(self, role):
         self.authenticate(None)
         response = self.client.post("/api/register/", {
-            "username": "new-user", "password": "StrongNewPass123", "role": role,
+            "email": "new-user@example.com", "password": "StrongNewPass123", "role": role,
             "is_staff": True, "is_superuser": True,
         }, format="json")
         self.assertEqual(response.status_code, 201, response.data)
-        user = User.objects.get(username="new-user")
+        user = User.objects.get(email="new-user@example.com")
         self.assertEqual(user.role, UserRole.CUSTOMER)
         self.assertFalse(user.is_staff)
         self.assertFalse(user.is_superuser)

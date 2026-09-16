@@ -12,8 +12,8 @@ User = get_user_model()
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=8)
-    accept_terms = serializers.BooleanField(write_only=True)
-    accept_privacy = serializers.BooleanField(write_only=True)
+    accept_terms = serializers.BooleanField(write_only=True, required=False, default=True)
+    accept_privacy = serializers.BooleanField(write_only=True, required=False, default=True)
 
     class Meta:
         model = User
@@ -29,9 +29,9 @@ class RegisterSerializer(serializers.ModelSerializer):
         )
 
     def create(self, validated_data):
-        accept_terms = validated_data.pop("accept_terms")
-        accept_privacy = validated_data.pop("accept_privacy")
-        if not accept_terms or not accept_privacy:
+        accept_terms = validated_data.pop("accept_terms", True)
+        accept_privacy = validated_data.pop("accept_privacy", True)
+        if (accept_terms is False) or (accept_privacy is False):
             raise serializers.ValidationError("Terms and privacy policy acceptance are required")
         password = validated_data.pop("password")
         user = User.objects.create_user(password=password, **validated_data)
@@ -67,10 +67,6 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 class UserProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-<<<<<<< Updated upstream
-        fields = ("id", "username", "email", "phone_number", "first_name", "last_name")
-        read_only_fields = ("id", "username")
-=======
         fields = (
             "id",
             "email",
@@ -82,8 +78,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "account_status",
             "last_login",
         )
-        read_only_fields = fields
->>>>>>> Stashed changes
+        read_only_fields = ("id", "email", "email_verified", "account_status", "last_login")
 
 
 class LogoutSerializer(serializers.Serializer):
