@@ -50,10 +50,17 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField(required=False)
+
     class Meta:
         model = User
         fields = ("id", "username", "email", "phone_number", "first_name", "last_name")
         read_only_fields = ("id", "username")
+
+    def update(self, instance, validated_data):
+        if "email" not in validated_data:
+            validated_data["email"] = instance.email
+        return super().update(instance, validated_data)
 
 
 class LogoutSerializer(serializers.Serializer):
